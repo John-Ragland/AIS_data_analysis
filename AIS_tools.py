@@ -2,6 +2,8 @@ import pandas as pd
 import os
 import numpy as np
 import scipy
+import math as m
+import pickle
 
 def get_AIS_data(AIS_data_dir=None):
     '''
@@ -166,3 +168,90 @@ def grid_all_passes(ship_passes):
             ship_passes_grid.append(ship_pass_grid)
         print((k+1)/len(ship_passes)*100, end='\r')
     return ship_passes_grid
+
+def create_spacetime_distribution():
+    '''
+    create space-time distribution from raw AIS Data
+    '''
+    # load ship_passes_grid.pkl
+    print('loading ship_passes_grid.pkl...')
+    ship_passes_grid = pickle.load( open( "ship_passes_grid.pkl", "rb" ) )
+    
+    # Every hour betwee 2015-2020
+    time_dim = 52608    #hours
+
+    print('combining data into single dataframe....')
+    full_data = pd.concat(ship_passes_grid)
+    full_data['timestamp'] = pd.to_datetime(full_data['times'])
+    full_data = full_data.reset_index(drop=True)
+
+    td = full_data['timestamp'] - pd.Timestamp('2015-01-01')
+    hours = td / np.timedelta64(1, 'h')
+
+    lat_grid = np.linspace(44.9, 46.9, 500)
+    lon_grid = np.linspace(-131.3, -128.4, 500)
+
+    st_dist = np.zeros((lat_grid.shape[0], lon_grid.shape[0], time_dim))
+    print('populating space time distribution...')
+    # Populate Space Time Distribution
+    for k in range(len(full_data)):
+        time_idx = m.trunc(hours[k])
+        st_dist[int(full_data.lat_idx[k]), int(full_data.lon_idx[k]), time_idx] += 1
+        if k % 1000 == 0:
+            print(f'Percent Complete: {k/len(full_data)*100}', end='\r')
+
+    return st_dist
+        
+
+def resample_time(df):
+    '''
+    Parameters
+    ----------
+    df
+
+    Returns
+    -------
+    gridded_data : pd Dataframe
+        data frame containing lats, lons, and times. which are the gridded data
+        from the ship pass
+    '''
+    lat_grid = np.linspace(44.9, 46.9, 500)
+    lon_grid = np.linspace(-131.3, -128.4, 500)
+
+    if (len(df) == 1):
+        lat_sampled = df.LAT[0]
+        lon_sampled = df.LON[0]
+
+        lats = [np.array(lat_grid)[np.searchsorted(lat_grid, lat_sampled)-1]]
+        lons = [np.array(lon_grid)[np.searchsorted(lon_grid, lon_sampled)-1]]
+        times = [df.time_val[0]]
+
+    else:
+        # define interpolation
+        f_lat = scipy.interpolate.interp1d(df.time_val, df.LAT, bounds_error=False)
+        f_lon = scipy.interpolate.interp1d(df.time_val, df.LON, bounds_error=False)
+
+        # create time array with \Delta t = 5 min
+        time_sampled = np.arange(df['time_val'].min(), df['time_val'].max(), 5*60e+9) # 5 min
+        # linearly interpolate lat/lon with time array
+        lats = f_lat(time_sampled)
+        lons = f_lon(time_sampled)
+
+        times = time_sampled
+    
+    d = {'lats':lats, 'lons':lons, 'times':times}
+    resampled_data = pd.DataFrame(data=d)
+    return resampled_data
+
+def resample_time_all(df_ls):
+    resampled_ls = []
+    for k, df in enumerate(df_ls):
+        try:
+            resampled = resample_time(df)
+        except:
+            print(f'Ship Pass {k} skipped: error')
+        else:
+            resampled_ls.append(resampled)
+        print(k/len(df_ls), end='\r')
+
+    return pd.concat(resampled_ls)
