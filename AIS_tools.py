@@ -4,6 +4,7 @@ import numpy as np
 import scipy
 import math as m
 import pickle
+import geopy.distance
 
 def get_AIS_data(AIS_data_dir=None):
     '''
@@ -20,33 +21,62 @@ def get_AIS_data(AIS_data_dir=None):
         pandas data frame containing AIS data with time column (datetime64)
         added
     '''
-    if AIS_data_dir == None:
-        AIS_data_dir = '/Volumes/Ocean_Acoustics/AIS_Data/Axial_Seamount/'
+    # Check of pickle File Exists
+    if os.path.exists('AIS_data.pkl'):
+        with open('AIS_data.pkl', 'rb') as f:
+            df = pickle.load(f)
+        return df
     
-    files = os.listdir(AIS_data_dir)
-
-    for file in files:
-        try:
-            df
-        except NameError:
-            df = pd.read_csv(AIS_data_dir + file)
-        else:
-            df = pd.concat([pd.read_csv(AIS_data_dir + file), df])
+    else:
+        print('Manually Loading AIS Data (pickle file did not exist)')
     
+        if AIS_data_dir == None:
+            AIS_data_dir = '/Volumes/Ocean_Acoustics/AIS_Data/Axial_Seamount/'
+        
+        files = os.listdir(AIS_data_dir)
 
-    df["time"] = df["TIMESTAMP UTC"].astype("datetime64")
-    df = df.sort_values(by=['time'])
-    df = df.reset_index()
+        for file in files:
+            try:
+                df
+            except NameError:
+                df = pd.read_csv(AIS_data_dir + file)
+            else:
+                df = pd.concat([pd.read_csv(AIS_data_dir + file), df])
+        
 
-    # add timestamp value
-    time_val = []
-    print('Converting Time to Values...')
+        df["time"] = df["TIMESTAMP UTC"].astype("datetime64")
+        df = df.sort_values(by=['time'])
+        df = df.reset_index()
+
+        # add timestamp value
+        time_val = []
+        print('Converting Time to Values...')
+        for k in range(len(df)):
+            time_val.append(df['time'][k].value)
+        df['time_val'] = time_val
+        
+        print('Getting Range from Midpoint...')
+        df = get_ranges(df)
+
+        print('Saving to pkl file...   ')
+        with open('AIS_data.pkl', 'wb') as f:
+            pickle.dump(df, f)
+        
+        print('Done.')
+        return df
+
+def get_ranges(df):
+    '''
+    returns dataframe with appended column for range from hydrophone midpoint
+    '''
+    mid = (45.94718, -129.99136)
+    r = []
     for k in range(len(df)):
-        time_val.append(df['time'][k].value)
-    df['time_val'] = time_val
-    
+        point = (df['LAT'][k], df['LON'][k])
+        r.append(geopy.distance.distance(mid, point).km)
+        print((k)/len(df)*100, end='\r')
+    df['Range (km)'] = r
     return df
-
 
 def single_ship_pass(df):
     '''
@@ -94,8 +124,9 @@ def single_ship_pass(df):
     for k in range(len(ship_passes)-1,-1, -1):
         if len(ship_passes[k]) == 0:
             _ = ship_passes.pop(k)
-    return ship_passes
+    
 
+    return ship_passes
 
 def grid_coord(df):
     '''
@@ -202,7 +233,6 @@ def create_spacetime_distribution():
 
     return st_dist
         
-
 def resample_time(df):
     '''
     Parameters
@@ -215,32 +245,31 @@ def resample_time(df):
         data frame containing lats, lons, and times. which are the gridded data
         from the ship pass
     '''
-    lat_grid = np.linspace(44.9, 46.9, 500)
-    lon_grid = np.linspace(-131.3, -128.4, 500)
-
     if (len(df) == 1):
-        lat_sampled = df.LAT[0]
-        lon_sampled = df.LON[0]
-
-        lats = [np.array(lat_grid)[np.searchsorted(lat_grid, lat_sampled)-1]]
-        lons = [np.array(lon_grid)[np.searchsorted(lon_grid, lon_sampled)-1]]
+        lats = df.LAT[0]
+        lons = df.LON[0]
         times = [df.time_val[0]]
+        ranges = df['Range (km)'][0]
 
     else:
         # define interpolation
         f_lat = scipy.interpolate.interp1d(df.time_val, df.LAT, bounds_error=False)
         f_lon = scipy.interpolate.interp1d(df.time_val, df.LON, bounds_error=False)
-
+        f_range = scipy.interpolate.interp1d(df.time_val, df['Range (km)'], bounds_error=False)
+        
         # create time array with \Delta t = 5 min
         time_sampled = np.arange(df['time_val'].min(), df['time_val'].max(), 5*60e+9) # 5 min
         # linearly interpolate lat/lon with time array
         lats = f_lat(time_sampled)
         lons = f_lon(time_sampled)
-
+        ranges = f_range(time_sampled)
         times = time_sampled
     
-    d = {'lats':lats, 'lons':lons, 'times':times}
+    d = {'lats':lats, 'lons':lons, 'times':times, 'ranges (km)':ranges}
     resampled_data = pd.DataFrame(data=d)
+
+    # Get bearing from hydrophone midpoint from Lat/Lon
+    resampled_data = get_bearing(resampled_data)
     return resampled_data
 
 def resample_time_all(df_ls):
@@ -253,5 +282,64 @@ def resample_time_all(df_ls):
         else:
             resampled_ls.append(resampled)
         print(k/len(df_ls), end='\r')
+    
+    df = pd.concat(resampled_ls)
+    df = df.dropna()
+    df = df.reset_index(drop=True)
+    return df
 
-    return pd.concat(resampled_ls)
+def get_bearing(all_ships):
+    '''
+    Parameters
+    ----------
+    all_ships : df
+        contains resampled in time dataframe
+    
+    Returns
+    -------
+    all_ships: df
+        adds column for bearing
+    '''
+    a = {'lats':np.deg2rad(45.94718), 'lons':np.deg2rad(-129.99136)}
+    b = {'lats':np.deg2rad(all_ships['lats']), 'lons':np.deg2rad(all_ships['lons'])}
+
+    dL = b['lons']-a['lons']
+
+    X = np.cos(b['lats'])* np.sin(dL)
+    Y = np.cos(a['lats'])* np.sin(b['lats']) - np.sin(a['lats'])*np.cos(b['lats'])* np.cos(dL)
+
+    bearing = np.rad2deg(np.arctan2(X,Y))
+
+    bearing = bearing%360
+    bearing = bearing.reset_index(drop=True)
+
+    all_ships['bearing'] = bearing
+    return all_ships
+
+def get_time_histogram(all_ships=None, R=None, load_pkl=True):
+    
+    if load_pkl:
+        with open('Time_Bearing_Histogram.pkl', 'rb') as f:
+            bearing, bins = pickle.load(f)
+    else:
+        bearing = np.zeros((52562,360))
+
+        base_time = np.datetime64('2015-01-01 00:00:00')
+        delT = np.timedelta64(1, 'h')
+
+        for k in range(52562):
+            delT = np.timedelta64(k, 'h')
+            start_time = pd.Timestamp(base_time + delT)
+            end_time = pd.Timestamp(base_time + delT + np.timedelta64(1,'h'))
+            
+            df_t = all_ships[(all_ships['times'] > start_time.value) & (all_ships['times'] < end_time.value)]
+            
+            bearing_t = df_t[df_t['ranges (km)'] < R]['bearing']
+            bearing_hist, bins = np.histogram(bearing_t, bins=360)
+            bearing[k,:] = bearing_hist
+            print(k/52562, end='\r')
+
+        # Save Bearing as Pickle File
+        with open('Time_Bearing_Histogram.pkl', 'wb') as f:
+            pickle.dump((bearing, bins), f)
+    return bearing, bins
