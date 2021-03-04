@@ -196,7 +196,13 @@ def resample_time(df, ship_pass_idx):
     resampled_data = get_bearing(resampled_data)
     return resampled_data
 
-def resample_time_all(df_ls):
+def resample_time_all(df_ls, load_pickle=True):
+    if load_pickle:
+        # Load pickle file
+        with open('AIS_Data_Resampled.pkl', 'rb') as f:
+            df = pickle.load(f)
+        return df
+    
     resampled_ls = []
     for k, df in enumerate(df_ls):
         try:
@@ -210,6 +216,11 @@ def resample_time_all(df_ls):
     df = pd.concat(resampled_ls)
     df = df.dropna()
     df = df.reset_index(drop=True)
+    
+    # save dataframe to pickle file
+    # save to .pkl file
+    with open('AIS_Data_Resampled.pkl', 'wb') as f:
+        pickle.dump([df], f)
     return df
 
 def get_bearing(all_ships):
