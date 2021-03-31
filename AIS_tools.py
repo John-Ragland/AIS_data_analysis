@@ -13,8 +13,9 @@ def get_AIS_data(AIS_data_dir=None, load_pickle=True):
     Parameters
     ----------
     AIS_data_dir : str
-        absolute path to AIS data. Should be a folder contain CSVs
-
+        absolute path to AIS data. Should be a folder containing CSVs
+    load_pickle : bool
+        specifies whether to re-calculate or load from pickle
     Returns
     -------
     df : pandas.DataFrame
