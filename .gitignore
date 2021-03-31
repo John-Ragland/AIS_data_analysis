@@ -2,3 +2,5 @@ figures/
 *.png
 *.html
 *.pkl
+*.eps
+*.pyc

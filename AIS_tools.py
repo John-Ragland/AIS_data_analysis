@@ -168,9 +168,15 @@ def resample_time(df, ship_pass_idx):
         lons = df.LON[0]
         times = [df.time_val[0]]
         ranges = df['Range (km)'][0]
-        MMSIs = df.MMSI
         index = [ship_pass_idx]
         speeds = df['SPEED (KNOTSx10)']
+
+        # Non Changing Columns
+        MMSIs = df.MMSI
+        SHIPNAMEs = df.SHIPNAME
+        VESSEL_TYPEs = df['VESSEL TYPE']
+        STATUSs = df['STATUS']
+        LENGTHs = df['LENGTH']
 
     else:
         # define interpolation
@@ -186,20 +192,30 @@ def resample_time(df, ship_pass_idx):
         ranges = f_range(time_sampled)
         speeds = f_speed(time_sampled)
         times = time_sampled
-        MMSIs = [df['MMSI'][0]]*len(lats)
         index = [ship_pass_idx]*len(lats)
 
-    d = {'LAT':lats, 'LON':lons, 'time_val':times, 'Range (km)':ranges, 'SPEED (KNOTSx10)':speeds, 'MMSI': MMSIs, 'original_index':index}
+        MMSIs = [df['MMSI'][0]]*len(lats)
+        SHIPNAMEs = df['SHIPNAME'][0]*len(lats)
+        VESSEL_TYPEs = df['VESSEL TYPE'][0]*len(lats)
+        STATUSs = df['STATUS'][0]*len(lats)
+        LENGTHs = df['LENGTH'][0]*len(lats)
+
+
+    d = {'LAT':lats, 'LON':lons, 'time_val':times, 'Range (km)':ranges,
+            'SPEED (KNOTSx10)':speeds, 'original_index':index, 'MMSI':MMSIs,
+            'SHIPNAMAE':SHIPNAMEs, 'VESSEL_TYPE':VESSEL_TYPEs, 'STATUS':STATUSs,
+            'LENGTH':LENGTHs}
+            
     resampled_data = pd.DataFrame(data=d)
 
     # Get bearing from hydrophone midpoint from Lat/Lon
     resampled_data = get_bearing(resampled_data)
     return resampled_data
 
-def resample_time_all(df_ls, load_pickle=True):
+def resample_time_all(df_ls=None, load_pickle=True):
     if load_pickle:
         # Load pickle file
-        with open('AIS_Data_Resampled.pkl', 'rb') as f:
+        with open('/Users/jhrag/Code/ocean_acoustics/AIS_data_analysis/AIS_Data_Resampled.pkl', 'rb') as f:
             df = pickle.load(f)
         return df
     
@@ -219,7 +235,7 @@ def resample_time_all(df_ls, load_pickle=True):
     
     # save dataframe to pickle file
     # save to .pkl file
-    with open('AIS_Data_Resampled.pkl', 'wb') as f:
+    with open('/Users/jhrag/Code/ocean_acoustics/AIS_data_analysis/AIS_Data_Resampled.pkl', 'wb') as f:
         pickle.dump([df], f)
     return df
 
@@ -251,6 +267,36 @@ def get_bearing(all_ships):
     all_ships['bearing'] = bearing
     return all_ships
 
+def get_ma_histogram_t(all_ships, avg_hours):
+    if avg_hours % 2 != 1:
+        raise Exception('avg_hours must be odd')
+    
+    hist_time, time_bins = np.histogram(all_ships['time_val']*1e-9/3600, bins=(365*24*6+2), density=True)
+    bin_width = time_bins[1] - time_bins[0]
+
+    kernel = np.ones(201)
+    hist_ma201 = np.convolve(hist_time, kernel, mode='valid')*bin_width
+    time_bins = time_bins[int(avg_hours-1/2):int(-(avg_hours-1)/2)]
+    return hist_ma201
+
+def get_ma_histogram_bt(all_ships, avg_hours):
+    if avg_hours % 2 != 1:
+        raise Exception('avg_hours must be odd')
+    
+    # Filter all_ships to be within 100 km
+    all_ships = all_ships[all_ships['Range (km)'] <=100]
+    
+    H, xbins, bearing_bins = np.histogram2d(all_ships['time_val']*1e-9/3600, all_ships['bearing'], bins=[(365*6+2)*24,360], density=True)
+    #bin_width = xbins[1] - xbins[0]
+
+    kernel = np.ones(201)
+
+    # Convert to Ship Counts
+    H = H/12*1457941
+    # Convolve along time axis
+    M_int_H = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=0, arr=H)
+    time_bins = xbins[int(avg_hours-1/2):int(-(avg_hours-1)/2)]
+    return time_bins, bearing_bins, M_int_H
 
 # Function Archive
 def grid_coord(df):
